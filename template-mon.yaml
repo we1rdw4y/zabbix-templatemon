@@ -14,7 +14,6 @@ zabbix_export:
           name: 'Zabbix API version'
           type: HTTP_AGENT
           key: zabbix.api.version
-          history: 1h
           value_type: TEXT
           trends: '0'
           preprocessing:
@@ -35,14 +34,10 @@ zabbix_export:
           tags:
             - tag: component
               value: api
-            - tag: debug
-              value: 'true'
         - uuid: fdb53e607c9c4400837454e620553a00
           name: 'Zabbix version equals'
           type: CALCULATED
           key: zabbix.api.version.eq
-          history: 1h
-          trends: '0'
           params: |
             count(last_foreach(/*/zabbix.api.version?[group="{$ZABBIX.SYNC.GROUP}"]), "eq", last(//zabbix.api.version))
             =
@@ -52,44 +47,22 @@ zabbix_export:
               parameters:
                 - 1h
           tags:
-            - tag: debug
-              value: 'true'
+            - tag: component
+              value: api
           triggers:
             - uuid: bad271e1cf68457f9b9c61cf2bd2f939
               expression: 'last(/Zabbix template monitoring/zabbix.api.version.eq)<>1'
               name: 'Zabbix version mismatch'
               priority: INFO
               tags:
-                - tag: sync
-        - uuid: bf5ca347d1ee4889b659ff9aa4dc69d5
-          name: zabbix.template.discovery.debug
-          type: HTTP_AGENT
-          key: zabbix.template.discovery.debug
-          delay: 5m
-          history: 1h
-          value_type: TEXT
-          trends: '0'
-          status: DISABLED
-          timeout: 30s
-          url: '{$ZABBIX.API.URL}'
-          follow_redirects: 'NO'
-          post_type: JSON
-          posts: '{"jsonrpc":"2.0","method":"template.get","params":{"output": ["uuid","templateid","name","description"],"selectTemplateGroups":["name"]},"id":1}'
-          headers:
-            - name: Content-Type
-              value: application/json-rpc
-            - name: Authorization
-              value: 'Bearer {$ZABBIX.TOKEN}'
-          request_method: POST
-          tags:
-            - tag: debug
-              value: 'true'
+                - tag: component
+                  value: api
       discovery_rules:
         - uuid: 85561d8b238c43e18532da6bbc7f99a2
           name: 'Template discovery'
           type: HTTP_AGENT
           key: zabbix.template.discovery
-          delay: 10m
+          delay: '{$ZABBIX.SYNC.PERIOD}'
           filter:
             conditions:
               - macro: '{#TPL.HOSTS}'
@@ -102,51 +75,23 @@ zabbix_export:
               name: 'Template {#TPL.NAME} (id {#TPL.ID}) w/same UUID'
               type: CALCULATED
               key: 'zabbix.template.count[{#TPL.UUID}]'
-              history: 1h
-              trends: '0'
+              discover: NO_DISCOVER
               params: 'item_count(/*/zabbix.template.hash[{#TPL.UUID}]?[group="{$ZABBIX.SYNC.GROUP}"])'
               preprocessing:
                 - type: DISCARD_UNCHANGED_HEARTBEAT
                   parameters:
                     - 1h
               tags:
-                - tag: component
-                  value: api
-                - tag: target
-                  value: template
-                - tag: 'template group'
-                  value: '{#TPL.GROUP}'
-            - uuid: 835f673c475142f480db7da8605b7ca7
-              name: 'Template {#TPL.NAME} (id {#TPL.ID}) equals'
-              type: CALCULATED
-              key: 'zabbix.template.hash.eq[{#TPL.UUID}]'
-              delay: 10m
-              history: 1h
-              trends: '0'
-              status: DISABLED
-              discover: NO_DISCOVER
-              params: |
-                count(last_foreach(/*/zabbix.template.hash[{#TPL.UUID}]?[group="{$ZABBIX.SYNC.GROUP}"]), "eq", last(//zabbix.template.hash[{#TPL.UUID}]))
-                =
-                item_count(/*/zabbix.template.hash[{#TPL.UUID}]?[group="{$ZABBIX.SYNC.GROUP}"])
-              description: '{#TPL.DESCR}'
-              preprocessing:
-                - type: DISCARD_UNCHANGED_HEARTBEAT
-                  parameters:
-                    - 1h
-              tags:
-                - tag: component
-                  value: api
-                - tag: target
-                  value: template
+                - tag: debug
+                - tag: template
+                  value: '{#TPL.NAME}'
                 - tag: 'template group'
                   value: '{#TPL.GROUP}'
             - uuid: 48b59bd35d3547bb9eb92c32f33dcc52
               name: 'Template {#TPL.NAME} (id {#TPL.ID}) hash'
               type: HTTP_AGENT
               key: 'zabbix.template.hash[{#TPL.UUID}]'
-              delay: 10m
-              history: 1h
+              delay: '{$ZABBIX.SYNC.PERIOD}'
               value_type: TEXT
               trends: '0'
               description: '{#TPL.DESCR}'
@@ -157,6 +102,9 @@ zabbix_export:
                 - type: JAVASCRIPT
                   parameters:
                     - 'return md5(value)'
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
               url: '{$ZABBIX.API.URL}'
               follow_redirects: 'NO'
               post_type: JSON
@@ -168,52 +116,80 @@ zabbix_export:
                   value: 'Bearer {$ZABBIX.TOKEN}'
               request_method: POST
               tags:
-                - tag: component
-                  value: api
-                - tag: target
-                  value: template
+                - tag: template
+                  value: '{#TPL.NAME}'
                 - tag: 'template group'
                   value: '{#TPL.GROUP}'
               trigger_prototypes:
                 - uuid: 4f86f5fc38c84adc9e19a50543516f7c
                   expression: |
-                    last(/Zabbix template monitoring/zabbix.template.hash[{#TPL.UUID}], #1)
-                    <>
-                    last(/Zabbix template monitoring/zabbix.template.hash[{#TPL.UUID}], #2)
-                  recovery_mode: NONE
+                    change(/Zabbix template monitoring/zabbix.template.hash[{#TPL.UUID}])
+                    and
+                    not nodata(/Zabbix template monitoring/zabbix.template.hash[{#TPL.UUID}], {$ZABBIX.SYNC.PERIOD})
+                  recovery_mode: RECOVERY_EXPRESSION
+                  recovery_expression: |
+                    not change(/Zabbix template monitoring/zabbix.template.hash[{#TPL.UUID}])
+                    or
+                    nodata(/Zabbix template monitoring/zabbix.template.hash[{#TPL.UUID}], {$ZABBIX.SYNC.PERIOD})
                   name: 'Template {#TPL.NAME} (id {#TPL.ID}) updated'
                   priority: INFO
-                  manual_close: 'YES'
                   tags:
                     - tag: template
+                      value: '{#TPL.NAME}'
             - uuid: bd5bf39308f742aa832a4611fc0fb386
               name: 'Template {#TPL.NAME} (id {#TPL.ID}) w/same hash'
               type: CALCULATED
               key: 'zabbix.template.same[{#TPL.UUID}]'
-              history: 1h
-              trends: '0'
+              discover: NO_DISCOVER
               params: 'count(last_foreach(/*/zabbix.template.hash[{#TPL.UUID}]?[group="{$ZABBIX.SYNC.GROUP}"]), "eq", last(//zabbix.template.hash[{#TPL.UUID}]))'
               preprocessing:
                 - type: DISCARD_UNCHANGED_HEARTBEAT
                   parameters:
                     - 1h
               tags:
-                - tag: component
-                  value: api
-                - tag: target
-                  value: template
+                - tag: debug
+                - tag: template
+                  value: '{#TPL.NAME}'
                 - tag: 'template group'
                   value: '{#TPL.GROUP}'
+            - uuid: 835f673c475142f480db7da8605b7ca7
+              name: 'Template {#TPL.NAME} (id {#TPL.ID}) equals'
+              type: CALCULATED
+              key: 'zabbix.template.sync[{#TPL.UUID}]'
+              params: |
+                count(last_foreach(/*/zabbix.template.hash[{#TPL.UUID}]?[group="{$ZABBIX.SYNC.GROUP}"]), "eq", last(//zabbix.template.hash[{#TPL.UUID}]))
+                =
+                item_count(/*/zabbix.template.hash[{#TPL.UUID}]?[group="{$ZABBIX.SYNC.GROUP}"])
+              description: '{#TPL.DESCR}'
+              preprocessing:
+                - type: DISCARD_UNCHANGED_HEARTBEAT
+                  parameters:
+                    - 1h
+              tags:
+                - tag: template
+                  value: '{#TPL.NAME}'
+                - tag: 'template group'
+                  value: '{#TPL.GROUP}'
+              trigger_prototypes:
+                - uuid: 0c43b0ff7f3246faa6ef27219edcd3da
+                  expression: 'not last(/Zabbix template monitoring/zabbix.template.sync[{#TPL.UUID}])'
+                  name: 'Template {#TPL.NAME} (id {#TPL.ID}) unsynced'
+                  priority: INFO
+                  tags:
+                    - tag: template
+                      value: '{#TPL.NAME}'
           trigger_prototypes:
             - uuid: 683d9f522211480ab332f04c2de5d985
               expression: |
                 last(/Zabbix template monitoring/zabbix.template.same[{#TPL.UUID}])
                 <>
                 last(/Zabbix template monitoring/zabbix.template.count[{#TPL.UUID}])
-              name: 'Template {#TPL.NAME} (id {#TPL.ID}) is not equal'
+              name: 'Template {#TPL.NAME} (id {#TPL.ID}) unsynced'
+              discover: NO_DISCOVER
               priority: INFO
               tags:
                 - tag: template
+                  value: '{#TPL.NAME}'
           timeout: 30s
           url: '{$ZABBIX.API.URL}'
           follow_redirects: 'NO'
@@ -259,10 +235,19 @@ zabbix_export:
             - type: JSONPATH
               parameters:
                 - $.result
+      tags:
+        - tag: component
+          value: api
+        - tag: target
+          value: server
+        - tag: target
+          value: zabbix
       macros:
         - macro: '{$ZABBIX.API.URL}'
           value: 'http://localhost:80/api_jsonrpc.php'
         - macro: '{$ZABBIX.SYNC.GROUP}'
           value: 'Zabbix servers/Sync'
+        - macro: '{$ZABBIX.SYNC.PERIOD}'
+          value: 10m
         - macro: '{$ZABBIX.TOKEN}'
           type: SECRET_TEXT
